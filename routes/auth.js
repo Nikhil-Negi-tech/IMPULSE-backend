@@ -153,21 +153,33 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ message: 'Refresh token required' });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    // Verify refresh token
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    } catch (tokenError) {
+      // If token is expired or invalid, clear it and return error
+      console.log('Refresh token validation failed:', tokenError.message);
+      return res.status(403).json({ message: 'Refresh token expired or invalid' });
+    }
+
     const user = await User.findById(decoded.userId);
 
     if (!user || user.refreshToken !== refreshToken) {
       return res.status(403).json({ message: 'Invalid refresh token' });
     }
 
-    // Generate new access token
-    const accessToken = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '15m' }
-    );
+    // Generate new tokens
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens(user._id);
+    
+    // Update refresh token in database
+    user.refreshToken = newRefreshToken;
+    await user.save();
 
-    res.json({ accessToken });
+    res.json({ 
+      accessToken,
+      refreshToken: newRefreshToken
+    });
   } catch (error) {
     console.error('Token refresh error:', error);
     res.status(403).json({ message: 'Invalid refresh token' });
