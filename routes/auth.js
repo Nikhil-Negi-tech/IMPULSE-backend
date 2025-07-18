@@ -160,7 +160,28 @@ router.post('/refresh', async (req, res) => {
     } catch (tokenError) {
       // If token is expired or invalid, clear it and return error
       console.log('Refresh token validation failed:', tokenError.message);
-      return res.status(403).json({ message: 'Refresh token expired or invalid' });
+      
+      // If it's an expired token, try to find the user and clear their refresh token
+      if (tokenError.name === 'TokenExpiredError') {
+        try {
+          const expiredDecoded = jwt.decode(refreshToken);
+          if (expiredDecoded && expiredDecoded.userId) {
+            const user = await User.findById(expiredDecoded.userId);
+            if (user && user.refreshToken === refreshToken) {
+              user.refreshToken = null;
+              await user.save();
+              console.log('Cleared expired refresh token for user:', expiredDecoded.userId);
+            }
+          }
+        } catch (cleanupError) {
+          console.log('Error cleaning up expired token:', cleanupError.message);
+        }
+      }
+      
+      return res.status(403).json({ 
+        message: 'Refresh token expired or invalid',
+        shouldLogout: true 
+      });
     }
 
     const user = await User.findById(decoded.userId);
@@ -181,8 +202,11 @@ router.post('/refresh', async (req, res) => {
       refreshToken: newRefreshToken
     });
   } catch (error) {
-    console.error('Token refresh error:', error);
-    res.status(403).json({ message: 'Invalid refresh token' });
+    console.error('Token refresh error:', error.message);
+    res.status(403).json({ 
+      message: 'Invalid refresh token',
+      shouldLogout: true 
+    });
   }
 });
 
@@ -224,6 +248,27 @@ router.get('/me', auth, async (req, res) => {
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/auth/cleanup-tokens
+// @desc    Clear all expired refresh tokens (admin/maintenance route)
+// @access  Public (for now, but should be admin-only in production)
+router.post('/cleanup-tokens', async (req, res) => {
+  try {
+    const result = await User.updateMany(
+      { refreshToken: { $ne: null } },
+      { $set: { refreshToken: null } }
+    );
+    
+    console.log(`Cleared ${result.modifiedCount} refresh tokens`);
+    res.json({ 
+      message: 'All refresh tokens cleared successfully',
+      tokensCleared: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Token cleanup error:', error);
+    res.status(500).json({ message: 'Server error during token cleanup' });
   }
 });
 
